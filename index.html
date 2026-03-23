@@ -92,10 +92,7 @@
         let hzMin = 9999, hzMax = 0;
         let autoSaveTimer;
 
-        // --- PARANDATUD TRANSKRIPTSIOONI MOOTOR ---
         let recognition;
-        let final_transcript = '';
-
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
             recognition = new SpeechRec();
@@ -104,27 +101,21 @@
             recognition.lang = 'et-EE';
 
             recognition.onresult = (event) => {
-                let interim_transcript = '';
+                let finalTranscript = '';
                 for (let i = event.resultIndex; i < event.results.length; ++i) {
                     if (event.results[i].isFinal) {
-                        final_transcript += event.results[i][0].transcript + ' ';
-                    } else {
-                        interim_transcript += event.results[i][0].transcript;
+                        finalTranscript += event.results[i][0].transcript + ' ';
                     }
                 }
-                document.getElementById('note-input').value = final_transcript + interim_transcript;
-                const textarea = document.getElementById('note-input');
-                textarea.scrollTop = textarea.scrollHeight;
+                if (finalTranscript) {
+                    const textarea = document.getElementById('note-input');
+                    textarea.value += finalTranscript;
+                    textarea.scrollTop = textarea.scrollHeight;
+                }
             };
 
             recognition.onend = () => {
-                if (isLive) {
-                    try { recognition.start(); } catch(e) {}
-                }
-            };
-
-            recognition.onerror = (event) => {
-                console.log("Recognition viga: " + event.error);
+                if (isLive) recognition.start();
             };
         }
 
@@ -139,12 +130,6 @@
         setInterval(() => { document.getElementById('clock').innerText = new Date().toLocaleTimeString('et-EE'); }, 1000);
 
         async function startSession() {
-            // 1. KÄIVITA RECOGNITION KOHE
-            if (recognition) {
-                final_transcript = '';
-                try { recognition.start(); } catch(e) { console.log(e); }
-            }
-
             try {
                 if ('wakeLock' in navigator) {
                     try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e) { console.log(e); }
@@ -215,6 +200,7 @@
                 document.getElementById('active-session').classList.remove('hidden');
                 isLive = true;
                 
+                if (recognition) recognition.start();
                 autoSaveTimer = setInterval(() => fixNow(false), AUTO_SAVE_MS);
 
             } catch (err) { alert("Viga: " + err); }
@@ -232,12 +218,9 @@
             speechBuffer = []; preBuffer = [];
             speechMs = 0; silenceMs = 0; hzMin = 9999; hzMax = 0;
             sessionStart = new Date();
-            
-            final_transcript = ''; 
             if(isManual) document.getElementById('note-input').value = "";
             document.getElementById('hz-min').innerText = "-";
             document.getElementById('hz-max').innerText = "-";
-            
             processAndSave(currentBuffer, clipStart, clipEnd, noteText, currentSpeechMs, currentSilenceMs, cHzMin, cHzMax);
         }
 
@@ -278,7 +261,7 @@
         }
 
         function stopSession() {
-            if (recognition) { try { recognition.stop(); } catch(e) {} }
+            if (recognition) recognition.stop();
             fixNow(true);
             isLive = false;
             clearInterval(autoSaveTimer);
