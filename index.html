@@ -40,6 +40,7 @@
                 <div class="play-text">Alusta</div>
             </div>
             <p class="mt-12 text-slate-600 text-[10px] uppercase tracking-[0.3em]">v32: STABIILNE BAAS</p>
+            <p class="text-slate-700 text-[10px] mt-2">Ekraan hoitakse aktiivsena</p>
         </div>
 
         <div id="active-session" class="hidden space-y-4 text-left">
@@ -57,7 +58,7 @@
                         <div class="font-mono text-xs font-bold text-amber-500"><span id="hz-min">-</span> / <span id="hz-max">-</span></div>
                     </div>
                 </div>
-                <textarea id="note-input" class="w-full bg-transparent text-sm focus:outline-none h-48 text-slate-200 placeholder-slate-600 resize-none" placeholder="Räägi ja siia ilmub tekst..."></textarea>
+                <textarea id="note-input" class="w-full bg-transparent text-sm focus:outline-none h-24 text-slate-200 placeholder-slate-600 resize-none" placeholder="Kirjuta märkmed siia..."></textarea>
             </div>
 
             <div class="grid grid-cols-2 gap-3">
@@ -78,45 +79,18 @@
 
         const AUTO_SAVE_MS = 10 * 60 * 1000; 
         const SPEECH_THRESHOLD = 0.008;
-        const PADDING_MS = 400;
+        const PADDING_MS = 400; // 0.4 sekundit puhvrit
 
         let isLive = false, wakeLock = null;
         let audioCtx, processor, stream;
         let speechBuffer = []; 
-        let preBuffer = [];
-        let postBufferCounter = 0;
+        let preBuffer = []; // Alguse puhver
+        let postBufferCounter = 0; // Lõpu puhvri lugeja
         
         let sessionStart = null;
         let speechMs = 0, silenceMs = 0;
         let hzMin = 9999, hzMax = 0;
         let autoSaveTimer;
-
-        // TRANSKRIPTSIOONI LOGIKA
-        let recognition;
-        let final_transcript = '';
-        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-        if (SpeechRec) {
-            recognition = new SpeechRec();
-            recognition.continuous = true;
-            recognition.interimResults = true;
-            recognition.lang = 'et-EE';
-
-            recognition.onresult = (event) => {
-                let interim_transcript = '';
-                for (let i = event.resultIndex; i < event.results.length; ++i) {
-                    if (event.results[i].isFinal) {
-                        final_transcript += event.results[i][0].transcript + ' ';
-                    } else {
-                        interim_transcript += event.results[i][0].transcript;
-                    }
-                }
-                document.getElementById('note-input').value = final_transcript + interim_transcript;
-                document.getElementById('note-input').scrollTop = document.getElementById('note-input').scrollHeight;
-            };
-
-            recognition.onend = () => { if (isLive) recognition.start(); };
-        }
 
         let db;
         const dbReq = indexedDB.open("Peegel_v32_Data", 1);
@@ -129,12 +103,6 @@
         setInterval(() => { document.getElementById('clock').innerText = new Date().toLocaleTimeString('et-EE'); }, 1000);
 
         async function startSession() {
-            // KÄIVITAME KOHE RECOGNITIONI - see on kriitiline!
-            if (recognition) {
-                final_transcript = '';
-                try { recognition.start(); } catch(e) { console.log(e); }
-            }
-
             try {
                 if ('wakeLock' in navigator) {
                     try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e) { console.log(e); }
@@ -163,6 +131,7 @@
                     if (!isLive) return;
                     const input = e.inputBuffer.getChannelData(0);
                     const inputCopy = new Float32Array(input);
+                    
                     analyser.getByteFrequencyData(dataArray);
                     let maxVal = -1, maxIdx = -1;
                     for (let i = 0; i < dataArray.length; i++) { if (dataArray[i] > maxVal) { maxVal = dataArray[i]; maxIdx = i; } }
@@ -172,6 +141,7 @@
                     const rms = Math.sqrt(sum/input.length);
 
                     if (rms > SPEECH_THRESHOLD) {
+                        // Kui rääkimine algab, lisa preBuffer sisu speechBufferisse (ainult korra)
                         if (postBufferCounter === 0 && preBuffer.length > 0) {
                             speechBuffer.push(...preBuffer);
                             preBuffer = [];
@@ -185,14 +155,17 @@
                             document.getElementById('hz-max').innerText = hzMax;
                         }
                         speechBuffer.push(inputCopy);
-                        postBufferCounter = postBufferFrames;
+                        postBufferCounter = postBufferFrames; // Reseti lõpupuhvri aeg
                     } else {
                         silenceMs += (4096 / audioCtx.sampleRate) * 1000;
                         document.getElementById('status-light').classList.remove('light-on');
+                        
+                        // Lõpupuhvri lisamine pärast vaikuse tekkimist
                         if (postBufferCounter > 0) {
                             speechBuffer.push(inputCopy);
                             postBufferCounter--;
                         } else {
+                            // Vaikuse ajal täidame pre-puhvrit uue rääkimise ootuses
                             preBuffer.push(inputCopy);
                             if (preBuffer.length > preBufferSize) preBuffer.shift();
                         }
@@ -200,12 +173,10 @@
                     document.getElementById('speech-timer').innerText = formatTime(speechMs);
                     document.getElementById('silence-timer').innerText = formatTime(silenceMs);
                 };
-
                 document.getElementById('setup-screen').classList.add('hidden');
                 document.getElementById('active-session').classList.remove('hidden');
                 isLive = true;
                 autoSaveTimer = setInterval(() => fixNow(false), AUTO_SAVE_MS);
-
             } catch (err) { alert("Viga: " + err); }
         }
 
@@ -221,12 +192,9 @@
             speechBuffer = []; preBuffer = [];
             speechMs = 0; silenceMs = 0; hzMin = 9999; hzMax = 0;
             sessionStart = new Date();
-            
-            final_transcript = ''; 
             if(isManual) document.getElementById('note-input').value = "";
             document.getElementById('hz-min').innerText = "-";
             document.getElementById('hz-max').innerText = "-";
-            
             processAndSave(currentBuffer, clipStart, clipEnd, noteText, currentSpeechMs, currentSilenceMs, cHzMin, cHzMax);
         }
 
@@ -267,7 +235,6 @@
         }
 
         function stopSession() {
-            if (recognition) { try { recognition.stop(); } catch(e) {} }
             fixNow(true);
             isLive = false;
             clearInterval(autoSaveTimer);
@@ -301,7 +268,7 @@
                         <div class="mt-2 text-right">
                             <button onclick="downloadHTML(${s.id})" class="text-amber-400 underline">HTML</button>
                         </div>
-                        ${s.note ? `<details class="mt-2"><summary class="text-slate-500 cursor-pointer">Vaata teksti</summary><div class="p-3 bg-black/40 text-[11px] mt-2 rounded-xl text-slate-300 italic text-left">${s.note}</div></details>` : ''}
+                        ${s.note ? `<details class="mt-2"><summary class="text-slate-500 cursor-pointer">Vaata märkmeid</summary><div class="p-3 bg-black/40 text-[11px] mt-2 rounded-xl text-slate-300 italic text-left">${s.note}</div></details>` : ''}
                     </div>`;
                 }).join('');
             };
