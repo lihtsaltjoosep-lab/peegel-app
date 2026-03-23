@@ -39,7 +39,7 @@
                 <svg class="play-icon-svg" viewBox="0 0 24 24"><path d="M7,4.5v15c0,0.8,0.9,1.3,1.6,0.9l11.5-7.5c0.6-0.4,0.6-1.4,0-1.8L8.6,3.6C7.9,3.2,7,3.7,7,4.5z" stroke="#f4ead5" stroke-width="2" stroke-linejoin="round"/></svg>
                 <div class="play-text">Alusta</div>
             </div>
-            <p class="mt-12 text-slate-600 text-[10px] uppercase tracking-[0.3em]">v32: STABIILNE BAAS</p>
+            <p class="mt-12 text-slate-600 text-[10px] uppercase tracking-[0.3em]">v32: TRANSKRIPTSIOON</p>
             <p class="text-slate-700 text-[10px] mt-2">Ekraan hoitakse aktiivsena</p>
         </div>
 
@@ -58,7 +58,7 @@
                         <div class="font-mono text-xs font-bold text-amber-500"><span id="hz-min">-</span> / <span id="hz-max">-</span></div>
                     </div>
                 </div>
-                <textarea id="note-input" class="w-full bg-transparent text-sm focus:outline-none h-24 text-slate-200 placeholder-slate-600 resize-none" placeholder="Kirjuta märkmed siia..."></textarea>
+                <textarea id="note-input" class="w-full bg-transparent text-sm focus:outline-none h-48 text-slate-200 placeholder-slate-600 resize-none" placeholder="Räägi ja siia ilmub tekst..."></textarea>
             </div>
 
             <div class="grid grid-cols-2 gap-3">
@@ -79,18 +79,45 @@
 
         const AUTO_SAVE_MS = 10 * 60 * 1000; 
         const SPEECH_THRESHOLD = 0.008;
-        const PADDING_MS = 400; // 0.4 sekundit puhvrit
+        const PADDING_MS = 400;
 
         let isLive = false, wakeLock = null;
         let audioCtx, processor, stream;
         let speechBuffer = []; 
-        let preBuffer = []; // Alguse puhver
-        let postBufferCounter = 0; // Lõpu puhvri lugeja
+        let preBuffer = [];
+        let postBufferCounter = 0;
         
         let sessionStart = null;
         let speechMs = 0, silenceMs = 0;
         let hzMin = 9999, hzMax = 0;
         let autoSaveTimer;
+
+        let recognition;
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRec();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = 'et-EE';
+
+            recognition.onresult = (event) => {
+                let finalTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript + ' ';
+                    }
+                }
+                if (finalTranscript) {
+                    const textarea = document.getElementById('note-input');
+                    textarea.value += finalTranscript;
+                    textarea.scrollTop = textarea.scrollHeight;
+                }
+            };
+
+            recognition.onend = () => {
+                if (isLive) recognition.start();
+            };
+        }
 
         let db;
         const dbReq = indexedDB.open("Peegel_v32_Data", 1);
@@ -131,7 +158,6 @@
                     if (!isLive) return;
                     const input = e.inputBuffer.getChannelData(0);
                     const inputCopy = new Float32Array(input);
-                    
                     analyser.getByteFrequencyData(dataArray);
                     let maxVal = -1, maxIdx = -1;
                     for (let i = 0; i < dataArray.length; i++) { if (dataArray[i] > maxVal) { maxVal = dataArray[i]; maxIdx = i; } }
@@ -141,7 +167,6 @@
                     const rms = Math.sqrt(sum/input.length);
 
                     if (rms > SPEECH_THRESHOLD) {
-                        // Kui rääkimine algab, lisa preBuffer sisu speechBufferisse (ainult korra)
                         if (postBufferCounter === 0 && preBuffer.length > 0) {
                             speechBuffer.push(...preBuffer);
                             preBuffer = [];
@@ -155,17 +180,14 @@
                             document.getElementById('hz-max').innerText = hzMax;
                         }
                         speechBuffer.push(inputCopy);
-                        postBufferCounter = postBufferFrames; // Reseti lõpupuhvri aeg
+                        postBufferCounter = postBufferFrames;
                     } else {
                         silenceMs += (4096 / audioCtx.sampleRate) * 1000;
                         document.getElementById('status-light').classList.remove('light-on');
-                        
-                        // Lõpupuhvri lisamine pärast vaikuse tekkimist
                         if (postBufferCounter > 0) {
                             speechBuffer.push(inputCopy);
                             postBufferCounter--;
                         } else {
-                            // Vaikuse ajal täidame pre-puhvrit uue rääkimise ootuses
                             preBuffer.push(inputCopy);
                             if (preBuffer.length > preBufferSize) preBuffer.shift();
                         }
@@ -173,10 +195,14 @@
                     document.getElementById('speech-timer').innerText = formatTime(speechMs);
                     document.getElementById('silence-timer').innerText = formatTime(silenceMs);
                 };
+
                 document.getElementById('setup-screen').classList.add('hidden');
                 document.getElementById('active-session').classList.remove('hidden');
                 isLive = true;
+                
+                if (recognition) recognition.start();
                 autoSaveTimer = setInterval(() => fixNow(false), AUTO_SAVE_MS);
+
             } catch (err) { alert("Viga: " + err); }
         }
 
@@ -235,6 +261,7 @@
         }
 
         function stopSession() {
+            if (recognition) recognition.stop();
             fixNow(true);
             isLive = false;
             clearInterval(autoSaveTimer);
@@ -268,7 +295,7 @@
                         <div class="mt-2 text-right">
                             <button onclick="downloadHTML(${s.id})" class="text-amber-400 underline">HTML</button>
                         </div>
-                        ${s.note ? `<details class="mt-2"><summary class="text-slate-500 cursor-pointer">Vaata märkmeid</summary><div class="p-3 bg-black/40 text-[11px] mt-2 rounded-xl text-slate-300 italic text-left">${s.note}</div></details>` : ''}
+                        ${s.note ? `<details class="mt-2"><summary class="text-slate-500 cursor-pointer">Vaata teksti</summary><div class="p-3 bg-black/40 text-[11px] mt-2 rounded-xl text-slate-300 italic text-left">${s.note}</div></details>` : ''}
                     </div>`;
                 }).join('');
             };
