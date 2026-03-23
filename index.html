@@ -71,21 +71,22 @@
     </div>
 
     <script>
-        // --- SERVICE WORKER REGISTREERIMINE ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js')
-                    .then(reg => console.log('Peegel Engine valmis'))
-                    .catch(err => console.log('Viga:', err));
+                navigator.serviceWorker.register('./sw.js').then(reg => console.log('Valmis'));
             });
         }
 
-        // --- KONFIGURATSIOON v32 ---
         const AUTO_SAVE_MS = 10 * 60 * 1000; 
         const SPEECH_THRESHOLD = 0.008;
+        const PADDING_MS = 400; // 0.4 sekundit puhvrit
+
         let isLive = false, wakeLock = null;
         let audioCtx, processor, stream;
         let speechBuffer = []; 
+        let preBuffer = []; // Alguse puhver
+        let postBufferCounter = 0; // Lõpu puhvri lugeja
+        
         let sessionStart = null;
         let speechMs = 0, silenceMs = 0;
         let hzMin = 9999, hzMax = 0;
@@ -118,12 +119,19 @@
                 source.connect(analyser);
                 analyser.connect(processor);
                 processor.connect(audioCtx.destination);
+                
                 sessionStart = new Date();
-                speechMs = 0; silenceMs = 0; speechBuffer = [];
+                speechMs = 0; silenceMs = 0; speechBuffer = []; preBuffer = [];
                 hzMin = 9999; hzMax = 0;
+
+                const preBufferSize = Math.ceil((PADDING_MS / 1000) * (audioCtx.sampleRate / 4096));
+                const postBufferFrames = preBufferSize;
+
                 processor.onaudioprocess = (e) => {
                     if (!isLive) return;
                     const input = e.inputBuffer.getChannelData(0);
+                    const inputCopy = new Float32Array(input);
+                    
                     analyser.getByteFrequencyData(dataArray);
                     let maxVal = -1, maxIdx = -1;
                     for (let i = 0; i < dataArray.length; i++) { if (dataArray[i] > maxVal) { maxVal = dataArray[i]; maxIdx = i; } }
@@ -131,7 +139,13 @@
                     let sum = 0;
                     for(let i=0; i<input.length; i++) sum += input[i]*input[i];
                     const rms = Math.sqrt(sum/input.length);
+
                     if (rms > SPEECH_THRESHOLD) {
+                        // Kui rääkimine algab, lisa preBuffer sisu speechBufferisse (ainult korra)
+                        if (postBufferCounter === 0 && preBuffer.length > 0) {
+                            speechBuffer.push(...preBuffer);
+                            preBuffer = [];
+                        }
                         speechMs += (4096 / audioCtx.sampleRate) * 1000;
                         document.getElementById('status-light').classList.add('light-on');
                         if(hz > 50) {
@@ -140,10 +154,21 @@
                             document.getElementById('hz-min').innerText = hzMin;
                             document.getElementById('hz-max').innerText = hzMax;
                         }
-                        speechBuffer.push(new Float32Array(input));
+                        speechBuffer.push(inputCopy);
+                        postBufferCounter = postBufferFrames; // Reseti lõpupuhvri aeg
                     } else {
                         silenceMs += (4096 / audioCtx.sampleRate) * 1000;
                         document.getElementById('status-light').classList.remove('light-on');
+                        
+                        // Lõpupuhvri lisamine pärast vaikuse tekkimist
+                        if (postBufferCounter > 0) {
+                            speechBuffer.push(inputCopy);
+                            postBufferCounter--;
+                        } else {
+                            // Vaikuse ajal täidame pre-puhvrit uue rääkimise ootuses
+                            preBuffer.push(inputCopy);
+                            if (preBuffer.length > preBufferSize) preBuffer.shift();
+                        }
                     }
                     document.getElementById('speech-timer').innerText = formatTime(speechMs);
                     document.getElementById('silence-timer').innerText = formatTime(silenceMs);
@@ -164,7 +189,7 @@
             const currentSpeechMs = speechMs;
             const currentSilenceMs = silenceMs;
             const cHzMin = hzMin; const cHzMax = hzMax;
-            speechBuffer = [];
+            speechBuffer = []; preBuffer = [];
             speechMs = 0; silenceMs = 0; hzMin = 9999; hzMax = 0;
             sessionStart = new Date();
             if(isManual) document.getElementById('note-input').value = "";
@@ -241,7 +266,6 @@
                             <audio src="${s.audio}" controls class="w-full h-8 opacity-90"></audio>
                         </div>
                         <div class="mt-2 text-right">
-                            <a href="${s.audio}" download="Peegel_${s.id}.wav" class="text-blue-400 underline mr-4">WAV</a>
                             <button onclick="downloadHTML(${s.id})" class="text-amber-400 underline">HTML</button>
                         </div>
                         ${s.note ? `<details class="mt-2"><summary class="text-slate-500 cursor-pointer">Vaata märkmeid</summary><div class="p-3 bg-black/40 text-[11px] mt-2 rounded-xl text-slate-300 italic text-left">${s.note}</div></details>` : ''}
